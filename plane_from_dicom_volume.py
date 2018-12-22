@@ -28,41 +28,176 @@ def extract_class(json_obj,class_str):
         return np.array([])
 def split_box_pos(ext_boxes,pos,img_shape):
     ext_box = []
+
     if pos =="left":
         for box in ext_boxes:
-            ctr_x = (box[0]+box[2])/2
-            if ctr_x < img_shape[1]/2:
+            if len(ext_boxes) == 2:
+                ctr_x = (box[0]+box[2])/2
+                if ctr_x < img_shape[1]/2:
+                    ext_box = box
+            elif len(ext_boxes)==1:
+                # 1:2, 2:1
+                x_max = box[2]
+                x_min = box[0]
+                internal_x = (1*x_max + 2*x_min)/3
                 ext_box = box
+                ext_box[2] = internal_x
+                # y is identical, preserve
+
     elif pos =="right":
         for box in ext_boxes:
-            ctr_x = (box[0]+box[2])/2
-            if ctr_x > img_shape[1]/2:
+            if len(ext_boxes) == 2:
+                ctr_x = (box[0]+box[2])/2
+                if ctr_x > img_shape[1]/2:
+                    ext_box = box
+            elif len(ext_boxes) == 1:
+                # 2:1
+                x_max = box[2]
+                x_min = box[0]
+                internal_x = (2*x_max + 1*x_min)/3
                 ext_box = box
+                ext_box[0] = internal_x
+
+
     else:
         raise NotImplemented
-    return np.array(ext_box)
 
-def load_josn_and_parser(path_list,img_shape, ext_class = "lowercase", pos = "right"):
+
+    return np.array(ext_box)
+def sorting_pts(pts,axis):
+    """
+    :param pts: N X 3 , [x,y,z]
+    :return:
+    """
+    assert pts.shape[1] > axis
+    ext_x = pts[:,0]
+    ext_y = pts[:, 1]
+    ext_z = pts[:, 2]
+    ex_pts = pts[:,axis]
+    sort_inds =np.argsort(ex_pts)
+    return np.stack([
+        ext_x[sort_inds],
+        ext_y[sort_inds],
+        ext_z[sort_inds]
+        ],axis=1)
+
+
+def load_josn_outter_inner_arch(basepath, ext_class = "lowercase", pos = "left"):
+    """
+    :param path_list: json annotation path
+    :param ext_class: extracted class name
+    :param pos:
+    :return: outer points array,  inner points array of the arch
+    """
+    # merge_pnt = []
+    path_list = glob.glob(basepath + '/*.json')
+    inner_arch_pts = []
+    outer_arch_pts = []
+    for ind, path in enumerate(path_list):
+        fname = os.path.splitext(os.path.basename(path))[0]
+        num_slice = int(fname)
+        json_obj = load_json(path)
+        ext_boxes = extract_class(json_obj,ext_class)
+        if ext_boxes.size == 0:
+            ext_boxes = extract_class(json_obj, "lowercase")
+        # print(ext_boxes.shape)
+        if ext_boxes.shape[0] == 2:
+            x_ctr = (ext_boxes[:,2] + ext_boxes[:,0])/2
+            # y_ctr = (ext_boxes[:,3] + ext_boxes[:,1])/2
+            inds = np.argsort(x_ctr)
+            left_box = ext_boxes[inds[0]]
+            right_box = ext_boxes[inds[1]]
+
+
+            ## outer box
+            outer_arch_pts.append([
+                left_box[0],
+                (left_box[1] + left_box[3])/2,
+                num_slice
+                ])
+            outer_arch_pts.append([
+                right_box[2],
+                (right_box[1] + right_box[3]) / 2,
+                num_slice
+            ])
+
+            ## inner box
+            inner_arch_pts.append([
+                left_box[2],
+                (left_box[1] + left_box[3])/2,
+                num_slice
+                ])
+            inner_arch_pts.append([
+                right_box[0],
+                (right_box[1] + right_box[3]) / 2,
+                num_slice
+            ])
+        elif ext_boxes.shape[0] == 1:
+            ext_boxes = ext_boxes[0]
+            outer_arch_pts.append([
+                ext_boxes[0],
+                np.sum(ext_boxes[0::2]/2),
+                num_slice
+            ])
+            outer_arch_pts.append([
+                ext_boxes[ 2],
+                np.sum(ext_boxes[ 1::2] / 2),
+                num_slice
+            ])
+            inner_arch_pts.append([
+                np.sum(ext_boxes[::2]/2),
+                np.sum(ext_boxes[1::2] / 2),
+                num_slice
+            ])
+        else:
+            pass
+
+    inner_arch_pts = np.stack(inner_arch_pts,axis=0)
+    outer_arch_pts = np.stack(outer_arch_pts, axis=0)
+    outer_arch_pts = sorting_pts(outer_arch_pts,axis=0)
+    inner_arch_pts = sorting_pts(inner_arch_pts, axis=0)
+    return outer_arch_pts, inner_arch_pts
+
+def load_josn_and_parser(path_list, ext_class = "nerve", pos = "left"):
     merge_pnt = []
     for ind, path in enumerate(path_list):
         fname = os.path.splitext(os.path.basename(path))[0]
         num_slice = int(fname)
         json_obj = load_json(path)
         ext_boxes = extract_class(json_obj,ext_class)
-        split_ext_box = split_box_pos(ext_boxes,pos,img_shape)
-        if split_ext_box.size>0:
-            x_ctr = (split_ext_box[0] + split_ext_box[2])/2
-            y_ctr = (split_ext_box[1] + split_ext_box[3]) / 2
+        if ext_boxes.size == 0:
+            ext_boxes = extract_class(json_obj, "lowercase")
+
+
+        for box in ext_boxes:
+            x_ctr = (box[0] + box[2])/2
+            y_ctr = (box[1] + box[3]) / 2
             merge_pnt.append([ x_ctr,
                               y_ctr,
                                num_slice
                               ])
-    return np.stack(merge_pnt,axis=0)
+    merge_pnt = np.stack(merge_pnt,axis=0)
+    merge_pnt = sorting_pts(merge_pnt,axis=0)
+    return merge_pnt
 
-def load_json_test():
-    json_path = 'C:/DNN/dataset/67998_171116120306(4)/67998_171116120306(4)/anno'
+
+
+        # split_ext_box = split_box_pos(ext_boxes,pos,img_shape)
+        # if split_ext_box.size>0:
+        #     x_ctr = (split_ext_box[0] + split_ext_box[2])/2
+        #     y_ctr = (split_ext_box[1] + split_ext_box[3]) / 2
+        #     merge_pnt.append([ x_ctr,
+        #                       y_ctr,
+        #                        num_slice
+        #                       ])
+    # return np.stack(merge_pnt,axis=0)
+def load_jsonlist_to_outer_inner_pts(json_path):
+    json_list = glob.glob(json_path + '/*.json')
+    load_josn_outter_inner_arch(json_list)
+def load_jsonlist_to_boxes_pts(json_path):
+    # json_path = 'C:/DNN/dataset/67998_171116120306(4)/67998_171116120306(4)/anno'
     json_list = glob.glob(json_path+'/*.json')
-    box_pnt = load_josn_and_parser(json_list,[450,550])
+    box_pnt = load_josn_and_parser(json_list)
     box_pnt = box_pnt.astype(np.int)
     return box_pnt
 
@@ -77,20 +212,87 @@ def extract_voxel_data(list_of_dicom_files):
         raise
     return voxel_ndarray
 
-def show_plane_from_volume(volumes):
-
+def show_plane_from_volume(volumes,x=-1,y=-1,z=-1):
+    """
+    :param volumes:[y,z,x]
+    :param x:
+    :param y:
+    :param z:
+    :return:
+    """
+    ix = 100 if x < 0 else x
+    iy = 330 if y < 0 else y
+    iz = 300 if z < 0 else z
     plt.subplot(131)
     # coronal
-    plt.imshow(volumes[:,300,:],cmap='gray')
-    x = np.linspace(0,100,100)
-    y = 2*x
+    plt.imshow(volumes[:,iz,:],cmap='gray')
     # plt.plot(x,y)
     plt.subplot(132)
     #sagittal
-    plt.imshow(volumes[:,:,100],cmap='gray')
+    plt.imshow(volumes[:,:,ix],cmap='gray')
     plt.subplot(133)
-    plt.imshow(volumes[322, :, :], cmap='gray')
-def get_plane_points_array(box_pnt, plane_shape):
+    plt.imshow(volumes[iy, :, :], cmap='gray')
+def get_plane_cube_points_array(outer_arch_pts, innter_arch_pts, plane_shape,volume_shape, L =20, color='r'):
+    M = plane_shape[0]
+    N = plane_shape[1]
+    outer_xx = outer_arch_pts[:, 0]
+    outer_yy = outer_arch_pts[:, 1]
+    outer_zz = outer_arch_pts[:, 2]
+
+    inner_xx = innter_arch_pts[:, 0]
+    inner_yy = innter_arch_pts[:, 1]
+    inner_zz = innter_arch_pts[:, 2]
+
+    # line smoothing
+    p = scipy.polyfit(inner_xx, inner_zz, 2)
+    inner_x = np.linspace(inner_xx.min(), inner_xx.max(), N)
+    inner_z = scipy.polyval(p, inner_x)
+
+    # line smoothing
+    p = scipy.polyfit(outer_xx, outer_zz, 2)
+    outer_x = np.linspace(outer_xx.min(), outer_xx.max(), N)
+    outer_z = scipy.polyval(p, outer_x)
+    # L = 20
+    xs = []
+    zs = []
+    heights = 150
+    avg_y = inner_yy.mean()
+    start_y = np.maximum(avg_y - heights, 0)
+    end_y = np.minimum(avg_y + heights, volume_shape[0])
+    iy = np.linspace(start_y, end_y, M)
+    vy = np.reshape(iy, [M, 1, 1])
+    vy = np.repeat(vy, N, 1)
+    vy = np.expand_dims(vy,axis=0)
+    vy = np.repeat(vy,L,0)
+
+
+    for in_x,in_z,out_x,out_z in zip(inner_x,inner_z,outer_x,outer_z):
+        xs.append(np.linspace(in_x,out_x,L))
+        zs.append(np.linspace(in_z,out_z,L))
+
+    xs = np.array(xs).transpose()
+    zs = np.array(zs).transpose()
+
+    graph_show = True
+    if graph_show:
+        for i in range(L):
+            plt.plot(xs[i],zs[i])
+        plt.show()
+
+
+    vx = np.reshape(xs, [L, 1, N, 1])
+    vz = np.reshape(zs, [L, 1, N, 1])
+
+    vx = np.repeat(vx, M, 1)
+    vz = np.repeat(vz, M, 1)
+
+    return np.concatenate([
+        vy,vz,vx
+    ],axis=3)
+
+
+
+def get_plane_points_array(box_pnt, plane_shape,volume_shape,color='r'):
     """
     :param box_pnt: N X 3 , [x,y,z]
     :param plane_shape:
@@ -103,37 +305,44 @@ def get_plane_points_array(box_pnt, plane_shape):
     yy = box_pnt[:, 1]
 
     # line smoothing
-    p = scipy.polyfit(xx, zz, 3)
+    p = scipy.polyfit(xx, zz, 2)
     ix = np.linspace(xx.min(), xx.max(), N)
     iz = scipy.polyval(p, ix)
 
     # line smoothing
     _x_ = np.arange(yy.shape[0])
-    py = scipy.polyfit(_x_,yy,3)
+    py = scipy.polyfit(_x_,yy,2)
     yy = scipy.polyval(py,_x_)
 
-
+    plt.plot(xx,zz,color+'*')
     plt.plot(ix, iz)
     # plt.show()
-    heights = 100
+    heights = 300
 
     # iy = np.linspace(yy.min(),yy.max(),N)
     dy = []
-    iy = np.interp(np.linspace(0,yy.shape[0],N),np.arange(yy.shape[0]),yy)
-    for y in iy:
-        dy.append(np.linspace(y-100,y+100,M))
-    vy = np.stack(dy,axis=1)
-    vy = np.expand_dims(vy,axis=2)
 
-    # dy = np.linspace()
-    # dy = np.linspace(200, 440, M)
-    # (200,)
+    fixed_y = True
+    if fixed_y:
+        avg_y = yy.mean()
+        start_y = np.maximum(avg_y - heights, 0)
+        end_y = np.minimum(avg_y + heights, volume_shape[0])
+        iy = np.linspace(start_y,end_y,M)
+        vy = np.reshape(iy, [M, 1, 1])
+        vy =  np.repeat(vy, N,1)
 
-    # 200 X 100
-    # M = dy.shape[0]
-    # N = ix.shape[0]
-    # vy = np.reshape(dy, [M, 1, 1])
-    # vy = np.repeat(vy, N, 1)
+
+    else:
+        iy = np.interp(np.linspace(0,yy.shape[0],N),np.arange(yy.shape[0]),yy)
+
+        for y in iy:
+            start_y  = np.maximum(y - heights,0)
+            end_y = np.minimum(y+heights,volume_shape[0])
+            dy.append(np.linspace(start_y, end_y,M))
+        vy = np.stack(dy,axis=1)
+        vy = np.expand_dims(vy,axis=2)
+
+
 
     vx = np.reshape(ix, [1, N, 1])
     vz = np.reshape(iz, [1, N, 1])
@@ -145,8 +354,16 @@ def get_plane_points_array(box_pnt, plane_shape):
     planes = np.concatenate([vy, vz, vx], axis=2)
     return planes
 def visualize_plane_image_from_voxel_dicom():
-    dcmpath = 'C:/DNN/dataset/67998_171116120306(4)/67998_171116120306(4)/CTData2'
+    worklist = '67998_171122175720 (3) (4)'
+
+    # dcmpath = "D:/DataSet/DataSet2018/20181113/" + worklist + '/CTData'
+
+    dcmpath = "C:/DNN/validation/20181113/67998_171121112638 (3) (4)/CTData"
     dcm_list = glob.glob(dcmpath +'/*.dcm')
+    print(len(dcm_list))
+    # json_path = "D:/DataSet/DataSet2018/validation/20181113/" + worklist + '/anno'
+    json_path = "C:/DNN/validation/20181113/67998_171121112638 (3) (4)/anno"
+    # json_path = "D:/DataSet/DataSet2018/testset/" + worklist + '/anno'
     voldumedata = extract_voxel_data(dcm_list)
 
     scales = 255.0/(voldumedata.max()-voldumedata.min())
@@ -156,23 +373,54 @@ def visualize_plane_image_from_voxel_dicom():
     volum_8bits = volum_8bits[::-1,:,:]
     print("volume image------------",volum_8bits.shape)
 
-    show_plane_from_volume(volum_8bits)
-    box_pnt = load_json_test()
 
-    plane_shape = [200,200]
-    planes = get_plane_points_array(box_pnt,plane_shape)
+    # N X  [x,y,z]
+    # box_pnt = load_jsonlist_to_boxes_pts(json_path)
+    outer_arch_pts, inner_arch_pts = load_josn_outter_inner_arch(json_path)
 
-    planes_reshape = np.reshape(planes,[-1,3])
-    plane_interp = plane_from_volume(volum_8bits,planes_reshape)
+    mid_y = int(outer_arch_pts[:,1].mean())
+    show_plane_from_volume(volum_8bits,y=mid_y)
 
-    planes_image = plane_interp.reshape(plane_shape)
+    plane_shape = [200,400]
+    all_plane =  True
+    if all_plane :
 
-    fig1 = plt.figure()
-    axe1 = fig1.subplots()
-    axe1.imshow(planes_image,cmap='gray')
-    plt.show()
+        planes_list = get_plane_cube_points_array(outer_arch_pts, inner_arch_pts, plane_shape, volum_8bits.shape, L = 50, color='g')
+
+        for cnt, plane in enumerate(planes_list):
+            plane_reshape = np.reshape(plane,[-1,3])
+            plane_interp = plane_from_volume(volum_8bits,plane_reshape)
+            plane_image = plane_interp.reshape(plane_shape)
+
+            plt.imsave("{}.png".format(cnt),plane_image.astype(np.uint8),cmap='gray')
+
+
+            # plt.figure()
+            # plt.imshow(plane_image,cmap='gray')
+            # plt.show()
+    else:
+
 
     #
+        outer_planes = get_plane_points_array(outer_arch_pts,plane_shape,volum_8bits.shape,color='r')
+        inner_planes = get_plane_points_array(inner_arch_pts, plane_shape, volum_8bits.shape, color='g')
+
+        outer_planes_reshape = np.reshape(outer_planes,[-1,3])
+        outerplane_interp = plane_from_volume(volum_8bits,outer_planes_reshape)
+        outerplane_image = outerplane_interp.reshape(plane_shape)
+
+        inner_planes_reshape = np.reshape(inner_planes, [-1, 3])
+        inner_planes_interp = plane_from_volume(volum_8bits, inner_planes_reshape)
+        inner_planes_image = inner_planes_interp.reshape(plane_shape)
+
+        fig1 = plt.figure()
+        axe1 = fig1.add_subplot(211)
+        axe2 = fig1.add_subplot(212)
+        axe1.imshow(outerplane_image,cmap='gray')
+        axe2.imshow(inner_planes_image, cmap='gray')
+        plt.show()
+
+
 
 
 
