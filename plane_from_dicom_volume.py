@@ -6,7 +6,7 @@ import numpy as np
 import json
 import os
 import scipy
-
+import os
 ############################## load json##############################
 def load_json(path):
     with open(path,"r") as f:
@@ -82,14 +82,17 @@ def sorting_pts(pts,axis):
         ],axis=1)
 
 
-def load_josn_outter_inner_arch(basepath, ext_class = "lowercase", pos = "left"):
+def load_josn_outter_inner_arch(basepath, volumeshape, ext_class = "lowercase", pos = "left"):
     """
+    volume-shape [y,z,x]
+    pts [ x,y,z]
     :param path_list: json annotation path
     :param ext_class: extracted class name
     :param pos:
     :return: outer points array,  inner points array of the arch
     """
-    # merge_pnt = []
+    if not os.path.isdir(basepath):
+        raise  ValueError("cannot find dir.{}".format(basepath))
     path_list = glob.glob(basepath + '/*.json')
     inner_arch_pts = []
     outer_arch_pts = []
@@ -152,10 +155,17 @@ def load_josn_outter_inner_arch(basepath, ext_class = "lowercase", pos = "left")
         else:
             pass
 
-    inner_arch_pts = np.stack(inner_arch_pts,axis=0)
-    outer_arch_pts = np.stack(outer_arch_pts, axis=0)
-    outer_arch_pts = sorting_pts(outer_arch_pts,axis=0)
-    inner_arch_pts = sorting_pts(inner_arch_pts, axis=0)
+        # if volumeshape[2] < outer_arch_pts[-1][0]:
+        #     print(volumeshape)
+    try:
+        inner_arch_pts = np.stack(inner_arch_pts,axis=0)
+        outer_arch_pts = np.stack(outer_arch_pts, axis=0)
+        outer_arch_pts = sorting_pts(outer_arch_pts,axis=0)
+        inner_arch_pts = sorting_pts(inner_arch_pts, axis=0)
+
+    except:
+        print(inner_arch_pts)
+        raise  ValueError
     return outer_arch_pts, inner_arch_pts
 
 def load_josn_and_parser(path_list, ext_class = "nerve", pos = "left"):
@@ -192,6 +202,9 @@ def load_josn_and_parser(path_list, ext_class = "nerve", pos = "left"):
         #                       ])
     # return np.stack(merge_pnt,axis=0)
 def load_jsonlist_to_outer_inner_pts(json_path):
+
+    if not os.path.isdir(json_path):
+        raise ValueError("cannot find dir:{}".format(json_path))
     json_list = glob.glob(json_path + '/*.json')
     load_josn_outter_inner_arch(json_list)
 def load_jsonlist_to_boxes_pts(json_path):
@@ -233,15 +246,28 @@ def show_plane_from_volume(volumes,x=-1,y=-1,z=-1):
     plt.subplot(133)
     plt.imshow(volumes[iy, :, :], cmap='gray')
 def get_plane_cube_points_array(outer_arch_pts, innter_arch_pts, plane_shape,volume_shape, L =20, color='r'):
+    """
+
+    :param outer_arch_pts: [x,y,z]
+    :param innter_arch_pts:
+    :param plane_shape:
+    :param volume_shape:[y,z,x]
+    :param L:
+    :param color:
+    :return:
+    """
+    length_x = volume_shape[2]
+    length_y = volume_shape[0]
+    length_z = volume_shape[1]
     M = plane_shape[0]
     N = plane_shape[1]
-    outer_xx = outer_arch_pts[:, 0]
-    outer_yy = outer_arch_pts[:, 1]
-    outer_zz = outer_arch_pts[:, 2]
+    outer_xx = np.minimum(np.maximum(outer_arch_pts[:, 0], 0),length_x)
+    outer_yy = np.minimum(np.maximum(outer_arch_pts[:, 1], 0),length_y)
+    outer_zz = np.minimum(np.maximum(outer_arch_pts[:, 2], 0),length_z)
 
-    inner_xx = innter_arch_pts[:, 0]
-    inner_yy = innter_arch_pts[:, 1]
-    inner_zz = innter_arch_pts[:, 2]
+    inner_xx = np.minimum(np.maximum(innter_arch_pts[:, 0], 0),length_x)
+    inner_yy = np.minimum(np.maximum(innter_arch_pts[:, 1], 0),length_y)
+    inner_zz = np.minimum(np.maximum(innter_arch_pts[:, 2], 0),length_z)
 
     # line smoothing
     p = scipy.polyfit(inner_xx, inner_zz, 2)
@@ -358,11 +384,13 @@ def visualize_plane_image_from_voxel_dicom():
 
     # dcmpath = "D:/DataSet/DataSet2018/20181113/" + worklist + '/CTData'
 
-    dcmpath = "C:/DNN/validation/20181113/67998_171121112638 (3) (4)/CTData"
+    # dcmpath = "C:/DNN/validation/20181113/67998_171121112638 (3) (4)/CTData"
+    dcmpath = "D:/DataSet/DataSet2018/20181113/67998_171129150550 (3) (4)/CTData"
     dcm_list = glob.glob(dcmpath +'/*.dcm')
     print(len(dcm_list))
     # json_path = "D:/DataSet/DataSet2018/validation/20181113/" + worklist + '/anno'
-    json_path = "C:/DNN/validation/20181113/67998_171121112638 (3) (4)/anno"
+    # json_path = "C:/DNN/validation/20181113/67998_171121112638 (3) (4)/anno"
+    json_path = "D:\DataSet\DataSet2018/validation/20181113/67998_171129150550 (3) (4)/anno"
     # json_path = "D:/DataSet/DataSet2018/testset/" + worklist + '/anno'
     voldumedata = extract_voxel_data(dcm_list)
 
@@ -376,7 +404,7 @@ def visualize_plane_image_from_voxel_dicom():
 
     # N X  [x,y,z]
     # box_pnt = load_jsonlist_to_boxes_pts(json_path)
-    outer_arch_pts, inner_arch_pts = load_josn_outter_inner_arch(json_path)
+    outer_arch_pts, inner_arch_pts = load_josn_outter_inner_arch(json_path, volum_8bits.shape)
 
     mid_y = int(outer_arch_pts[:,1].mean())
     show_plane_from_volume(volum_8bits,y=mid_y)
@@ -387,17 +415,14 @@ def visualize_plane_image_from_voxel_dicom():
 
         planes_list = get_plane_cube_points_array(outer_arch_pts, inner_arch_pts, plane_shape, volum_8bits.shape, L = 50, color='g')
 
-        for cnt, plane in enumerate(planes_list):
+        # for cnt, plane in enumerate(planes_list[::-1]):
+        for cnt, plane in enumerate(planes_list[::-1]):
             plane_reshape = np.reshape(plane,[-1,3])
             plane_interp = plane_from_volume(volum_8bits,plane_reshape)
             plane_image = plane_interp.reshape(plane_shape)
 
             plt.imsave("{}.png".format(cnt),plane_image.astype(np.uint8),cmap='gray')
 
-
-            # plt.figure()
-            # plt.imshow(plane_image,cmap='gray')
-            # plt.show()
     else:
 
 
@@ -465,4 +490,3 @@ def test_examples_interp():
 
 if __name__=="__main__":
     visualize_plane_image_from_voxel_dicom()
-
