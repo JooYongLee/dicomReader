@@ -70,18 +70,70 @@ def sorting_pts(pts,axis):
     :return:
     """
     assert pts.shape[1] > axis
-    ext_x = pts[:,0]
+    ext_x = pts[:, 0]
     ext_y = pts[:, 1]
     ext_z = pts[:, 2]
-    ex_pts = pts[:,axis]
+    ex_pts = pts[:, axis]
     sort_inds =np.argsort(ex_pts)
     return np.stack([
         ext_x[sort_inds],
         ext_y[sort_inds],
         ext_z[sort_inds]
-        ],axis=1)
+        ], axis=1)
 
+def split_outer_inner_arch_pt(ext_boxes, num_slice):
+    outer_arch_pts = []
+    inner_arch_pts = []
+    if ext_boxes.shape[0] == 2:
+        x_ctr = (ext_boxes[:, 2] + ext_boxes[:, 0]) / 2
+        # y_ctr = (ext_boxes[:,3] + ext_boxes[:,1])/2
+        inds = np.argsort(x_ctr)
+        left_box = ext_boxes[inds[0]]
+        right_box = ext_boxes[inds[1]]
 
+        ## outer box
+        outer_arch_pts.append([
+            left_box[0],
+            (left_box[1] + left_box[3]) / 2,
+            num_slice
+        ])
+        outer_arch_pts.append([
+            right_box[2],
+            (right_box[1] + right_box[3]) / 2,
+            num_slice
+        ])
+
+        ## inner box
+        inner_arch_pts.append([
+            left_box[2],
+            (left_box[1] + left_box[3]) / 2,
+            num_slice
+        ])
+        inner_arch_pts.append([
+            right_box[0],
+            (right_box[1] + right_box[3]) / 2,
+            num_slice
+        ])
+    elif ext_boxes.shape[0] == 1:
+        ext_boxes = ext_boxes[0]
+        outer_arch_pts.append([
+            ext_boxes[0],
+            np.sum(ext_boxes[0::2] / 2),
+            num_slice
+        ])
+        outer_arch_pts.append([
+            ext_boxes[2],
+            np.sum(ext_boxes[1::2] / 2),
+            num_slice
+        ])
+        inner_arch_pts.append([
+            np.sum(ext_boxes[::2] / 2),
+            np.sum(ext_boxes[1::2] / 2),
+            num_slice
+        ])
+    else:
+        pass
+    return outer_arch_pts, inner_arch_pts
 def load_josn_outter_inner_arch(basepath, volumeshape, ext_class = "lowercase", pos = "left"):
     """
     volume-shape [y,z,x]
@@ -100,67 +152,22 @@ def load_josn_outter_inner_arch(basepath, volumeshape, ext_class = "lowercase", 
         fname = os.path.splitext(os.path.basename(path))[0]
         num_slice = int(fname)
         json_obj = load_json(path)
-        ext_boxes = extract_class(json_obj,ext_class)
-        if ext_boxes.size == 0:
-            ext_boxes = extract_class(json_obj, "lowercase")
-        # print(ext_boxes.shape)
-        if ext_boxes.shape[0] == 2:
-            x_ctr = (ext_boxes[:,2] + ext_boxes[:,0])/2
-            # y_ctr = (ext_boxes[:,3] + ext_boxes[:,1])/2
-            inds = np.argsort(x_ctr)
-            left_box = ext_boxes[inds[0]]
-            right_box = ext_boxes[inds[1]]
+        # ext_boxes = extract_class(json_obj,ext_class)
+        # if ext_boxes.size == 0:
+        ext_boxes = extract_class(json_obj, ext_class)
+        # if( lowercase_boxes.size > 0 ):
+        #     outer_arch_pt, inner_arch_pt = split_outer_inner_arch_pt(lowercase_boxes, num_slice)
+        # else:
+        #     print("------------get nerve sampling-----------------")
+        #     nerve_boxes = extract_class(json_obj, "nerve")
+        outer_arch_pt, inner_arch_pt = split_outer_inner_arch_pt(ext_boxes, num_slice)
+        outer_arch_pts += outer_arch_pt
+        inner_arch_pts += inner_arch_pt
 
-
-            ## outer box
-            outer_arch_pts.append([
-                left_box[0],
-                (left_box[1] + left_box[3])/2,
-                num_slice
-                ])
-            outer_arch_pts.append([
-                right_box[2],
-                (right_box[1] + right_box[3]) / 2,
-                num_slice
-            ])
-
-            ## inner box
-            inner_arch_pts.append([
-                left_box[2],
-                (left_box[1] + left_box[3])/2,
-                num_slice
-                ])
-            inner_arch_pts.append([
-                right_box[0],
-                (right_box[1] + right_box[3]) / 2,
-                num_slice
-            ])
-        elif ext_boxes.shape[0] == 1:
-            ext_boxes = ext_boxes[0]
-            outer_arch_pts.append([
-                ext_boxes[0],
-                np.sum(ext_boxes[0::2]/2),
-                num_slice
-            ])
-            outer_arch_pts.append([
-                ext_boxes[ 2],
-                np.sum(ext_boxes[ 1::2] / 2),
-                num_slice
-            ])
-            inner_arch_pts.append([
-                np.sum(ext_boxes[::2]/2),
-                np.sum(ext_boxes[1::2] / 2),
-                num_slice
-            ])
-        else:
-            pass
-
-        # if volumeshape[2] < outer_arch_pts[-1][0]:
-        #     print(volumeshape)
     try:
-        inner_arch_pts = np.stack(inner_arch_pts,axis=0)
+        inner_arch_pts = np.stack(inner_arch_pts, axis=0)
         outer_arch_pts = np.stack(outer_arch_pts, axis=0)
-        outer_arch_pts = sorting_pts(outer_arch_pts,axis=0)
+        outer_arch_pts = sorting_pts(outer_arch_pts, axis=0)
         inner_arch_pts = sorting_pts(inner_arch_pts, axis=0)
 
     except:
@@ -299,10 +306,14 @@ def get_plane_cube_points_array(outer_arch_pts, innter_arch_pts, plane_shape,vol
     xs = np.array(xs).transpose()
     zs = np.array(zs).transpose()
 
-    graph_show = True
+    sample = [xs, zs]
+    graph_show = False
     if graph_show:
-        for i in range(L):
-            plt.plot(xs[i],zs[i])
+        # sample = [xs,zs]
+        # for i in range(outer_xx.size):
+        # plt.plot(outer_xx,outer_zz,'r*')
+        plt.plot(    inner_xx,     inner_zz, 'g*')
+
         plt.show()
 
 
@@ -314,7 +325,7 @@ def get_plane_cube_points_array(outer_arch_pts, innter_arch_pts, plane_shape,vol
 
     return np.concatenate([
         vy,vz,vx
-    ],axis=3)
+    ],axis=3), sample
 
 
 
@@ -379,20 +390,120 @@ def get_plane_points_array(box_pnt, plane_shape,volume_shape,color='r'):
     # planes = np.concatenate([vz,vy,vz],axis=2)
     planes = np.concatenate([vy, vz, vx], axis=2)
     return planes
-def visualize_plane_image_from_voxel_dicom():
-    worklist = '67998_171122175720 (3) (4)'
+def sample_show(outer_sample, inner_sample):
+
+    graph_show = True
+    if graph_show:
+        outer_xs = outer_sample[0]
+        outer_zs = outer_sample[1]
+        inner_xs = inner_sample[0]
+        inner_zs = inner_sample[1]
+        # sample = [xs,zs]
+        for i in range(outer_xs.shape[0]):
+            if i % 5 == 0:
+                plt.plot(outer_xs[i],outer_zs[i],'r')
+
+        for i in range(inner_xs.shape[0]):
+            if i % 5 == 0:
+                plt.plot(inner_xs[i],inner_zs[i],'b')
+
+        plt.show()
+def visualize_plane_image_from_voxel_dicom_nerve():
+
 
     # dcmpath = "D:/DataSet/DataSet2018/20181113/" + worklist + '/CTData'
-
+    casename = "67998_171201192022 (3) (4)"
     # dcmpath = "C:/DNN/validation/20181113/67998_171121112638 (3) (4)/CTData"
-    dcmpath = "D:/DataSet/DataSet2018/20181113/67998_171129150550 (3) (4)/CTData"
+    # D:\DataSet\DataSet2018\validation\20181113\67998_171129100349(3)(4)
+    dcmpath = "D:/DataSet/DataSet2018/All/20181113/" + casename + "/CTData"
     dcm_list = glob.glob(dcmpath +'/*.dcm')
     print(len(dcm_list))
     # json_path = "D:/DataSet/DataSet2018/validation/20181113/" + worklist + '/anno'
     # json_path = "C:/DNN/validation/20181113/67998_171121112638 (3) (4)/anno"
-    json_path = "D:\DataSet\DataSet2018/validation/20181113/67998_171129150550 (3) (4)/anno"
+    json_path = "D:/DataSet/Evaluation/test_image_all_0102/" + casename + "/anno"
     # json_path = "D:/DataSet/DataSet2018/testset/" + worklist + '/anno'
     voldumedata = extract_voxel_data(dcm_list)
+
+    sampling_size = 35
+
+    scales = 255.0/(voldumedata.max()-voldumedata.min())
+    volum_8bits = (voldumedata  - voldumedata.min())*scales
+    volum_8bits = volum_8bits.astype(np.uint8).transpose()
+    # conver axis...
+    volum_8bits = volum_8bits[::-1,:,:]
+    print("volume image------------",volum_8bits.shape)
+
+
+    # N X  [x,y,z]
+    # box_pnt = load_jsonlist_to_boxes_pts(json_path)
+    outer_arch_lower_pts, inner_arch_lower_pts = load_josn_outter_inner_arch(json_path, volum_8bits.shape,ext_class="lowercase")
+    outer_arch_nerve_pts, inner_arch_nerve_pts = load_josn_outter_inner_arch(json_path, volum_8bits.shape, ext_class="nerve")
+
+
+    mid_y = int(outer_arch_lower_pts[:,1].mean())
+    show_plane_from_volume(volum_8bits,y=mid_y)
+
+    plane_shape = [200,400]
+    all_plane =  True
+
+    save_dir = casename
+    if not os.path.isdir(save_dir) : os.mkdir(save_dir)
+    if all_plane :
+
+        # planes_list = get_plane_cube_points_array(outer_arch_lower_pts, inner_arch_lower_pts, plane_shape, volum_8bits.shape, L = sampling_size, color='g')
+
+        outer_planes_list, outer_sample = get_plane_cube_points_array(outer_arch_lower_pts, outer_arch_nerve_pts, plane_shape,
+                                                  volum_8bits.shape, L=sampling_size, color='g')
+
+        inner_planes_list, inner_sample = get_plane_cube_points_array(outer_arch_nerve_pts, inner_arch_lower_pts, plane_shape,
+                                                  volum_8bits.shape, L=sampling_size, color='g')
+
+        # sample_show(outer_sample, inner_sample)
+        plane_list = [*inner_planes_list,*outer_planes_list]
+        # for cnt, plane in enumerate(planes_list[::-1]):
+        for cnt, plane in enumerate(plane_list[::-1]):
+            plane_reshape = np.reshape(plane,[-1,3])
+            plane_interp = plane_from_volume(volum_8bits,plane_reshape)
+            plane_image = plane_interp.reshape(plane_shape)
+
+            plt.imsave("{}/{}.png".format(save_dir,cnt),plane_image.astype(np.uint8),cmap='gray')
+    else:
+        outer_planes = get_plane_points_array(outer_arch_pts,plane_shape,volum_8bits.shape,color='r')
+        inner_planes = get_plane_points_array(inner_arch_pts, plane_shape, volum_8bits.shape, color='g')
+
+        outer_planes_reshape = np.reshape(outer_planes,[-1,3])
+        outerplane_interp = plane_from_volume(volum_8bits,outer_planes_reshape)
+        outerplane_image = outerplane_interp.reshape(plane_shape)
+
+        inner_planes_reshape = np.reshape(inner_planes, [-1, 3])
+        inner_planes_interp = plane_from_volume(volum_8bits, inner_planes_reshape)
+        inner_planes_image = inner_planes_interp.reshape(plane_shape)
+
+        fig1 = plt.figure()
+        axe1 = fig1.add_subplot(211)
+        axe2 = fig1.add_subplot(212)
+        axe1.imshow(outerplane_image,cmap='gray')
+        axe2.imshow(inner_planes_image, cmap='gray')
+        plt.show()
+
+
+def visualize_plane_image_from_voxel_dicom():
+
+
+    # dcmpath = "D:/DataSet/DataSet2018/20181113/" + worklist + '/CTData'
+    casename = "76278_171123124810_(3) (4)"
+    # dcmpath = "C:/DNN/validation/20181113/67998_171121112638 (3) (4)/CTData"
+    # D:\DataSet\DataSet2018\validation\20181113\67998_171129100349(3)(4)
+    dcmpath = "D:/DataSet/DataSet2018/All/20181113/" + casename + "/CTData"
+    dcm_list = glob.glob(dcmpath +'/*.dcm')
+    print(len(dcm_list))
+    # json_path = "D:/DataSet/DataSet2018/validation/20181113/" + worklist + '/anno'
+    # json_path = "C:/DNN/validation/20181113/67998_171121112638 (3) (4)/anno"
+    json_path = "D:/DataSet/panorama/source_20181113/" + casename + "/anno"
+    # json_path = "D:/DataSet/DataSet2018/testset/" + worklist + '/anno'
+    voldumedata = extract_voxel_data(dcm_list)
+
+    sampling_size = 70
 
     scales = 255.0/(voldumedata.max()-voldumedata.min())
     volum_8bits = (voldumedata  - voldumedata.min())*scales
@@ -411,9 +522,12 @@ def visualize_plane_image_from_voxel_dicom():
 
     plane_shape = [200,400]
     all_plane =  True
+
+    save_dir = casename
+    if not os.path.isdir(save_dir) : os.mkdir(save_dir)
     if all_plane :
 
-        planes_list = get_plane_cube_points_array(outer_arch_pts, inner_arch_pts, plane_shape, volum_8bits.shape, L = 50, color='g')
+        planes_list = get_plane_cube_points_array(outer_arch_pts, inner_arch_pts, plane_shape, volum_8bits.shape, L = sampling_size, color='g')
 
         # for cnt, plane in enumerate(planes_list[::-1]):
         for cnt, plane in enumerate(planes_list[::-1]):
@@ -421,7 +535,7 @@ def visualize_plane_image_from_voxel_dicom():
             plane_interp = plane_from_volume(volum_8bits,plane_reshape)
             plane_image = plane_interp.reshape(plane_shape)
 
-            plt.imsave("{}.png".format(cnt),plane_image.astype(np.uint8),cmap='gray')
+            plt.imsave("{}/{}.png".format(save_dir,cnt),plane_image.astype(np.uint8),cmap='gray')
 
     else:
 
@@ -444,9 +558,6 @@ def visualize_plane_image_from_voxel_dicom():
         axe1.imshow(outerplane_image,cmap='gray')
         axe2.imshow(inner_planes_image, cmap='gray')
         plt.show()
-
-
-
 
 
 def plane_from_volume(volumes,pts):
@@ -489,4 +600,5 @@ def test_examples_interp():
     print(interpolating_function(pts))
 
 if __name__=="__main__":
-    visualize_plane_image_from_voxel_dicom()
+    # visualize_plane_image_from_voxel_dicom()
+    visualize_plane_image_from_voxel_dicom_nerve()
