@@ -248,7 +248,7 @@ class ContourExtractor(object):
 
 
 
-    @timefn2
+    # @timefn2
     def Update(self, test_points):
         u = self.u
 
@@ -675,7 +675,7 @@ class MainWindow(Qt.QMainWindow):
         self.extractor_surf = ContourExtractor()
 
         self.update_texture()
-        # self.update_surface()
+        self.update_surface()
 
         self.layout = Qt.QGridLayout()
         self.layout.addWidget(self.vtkWidget, 0, 0, 1, 1)
@@ -710,7 +710,7 @@ class MainWindow(Qt.QMainWindow):
             self.test_actor.GetMapper().SetScalarRange(self.test_polydata.GetScalarRange())
         self.iren.Render()
 
-    @timefn2
+    # @timefn2
     def update_surface(self):
         plane = self.plane_actor.GetMapper().GetInput()
         trasnfrom = self.plane_actor.GetUserTransform()
@@ -740,49 +740,58 @@ class MainWindow(Qt.QMainWindow):
 
         # x_axis = np.cross(y, normal)
 
-        z_axis = normal
+        z = normal
         y_axis = np.array([0, 1, 0])
-        x_axis = np.cross(y_axis, z_axis)
+        x_axis = np.cross(y_axis, z)
+        x = x_axis / np.linalg.norm(x_axis)
+        y = np.cross(z, x)
 
-        roi_points_translate = roi_points - plane_center
-        x = np.dot(x_axis, roi_points_translate.T)
-        y = np.dot(y_axis, roi_points_translate.T)
-        z = np.dot(z_axis, roi_points_translate.T)
+        sx = np.dot(roi_points, x)
+        sy = np.dot(roi_points, y)
+        sz = proj_points[where_positive]
 
-        xy = np.stack([x, y], axis=1)
+        max_sz = sz.max()
 
-        num = 100
+        sx_min = sx.min()
+        sx_max = sx.max()
+        sy_min = sy.min()
+        sy_max = sy.max()
 
-        sample_x = np.linspace(x.min(), x.max(), num)
-        sample_y = np.linspace(y.min(), y.max(), num)
+        r = (max_sz) / (sz)
 
+        sxyz = np.stack([sx, sy, sz], axis=1)
+        ps = r.reshape([-1, 1]) * sxyz
 
-        transform_x = self.transform_pts[where_positive][:, 0]
-        transform_y = self.transform_pts[where_positive][:, 1]
-        transform_z = self.transform_pts[where_positive][:, 2]
+        where_x = np.logical_and( ps[:, 0] >= sx_min, ps[:, 0] <= sx_max)
+        where_y = np.logical_and( ps[:, 1] >= sy_min, ps[:, 1] <= sy_max)
 
-        tz = transform_x
-        t_phi = np.arctan2(transform_y, transform_z)
-
-        fig = plt.figure()
-        ax1 = fig.add_subplot(121)
-        ax2 = fig.add_subplot(122)
-
-        ax1.plot(transform_y, transform_x, '*')
-
-        ax2.plot(transform_y, transform_z, '*')
-
+        where_xy = np.logical_and(where_x, where_y)
+        pts = ps[where_xy]
+        #
+        # make an agg figure
+        fig, ax = plt.subplots()
+        # ax.plot(phi_list, z_list, '*')
+        # ax.plot([1, 2, 3])
+        ax.plot(pts.T[0], pts.T[1], '.')
+        ax.set_title('a simple figure')
         fig.canvas.draw()
 
         # grab the pixel buffer and dump it into a numpy array
         buf = fig.canvas.buffer_rgba()
         l, b, w, h = fig.bbox.bounds
-
+        # The array needs to be copied, because the underlying buffer
+        # may be reallocated when the window is resized.
         X = np.frombuffer(buf, np.uint8).copy()
 
         image = X.reshape([int(h), int(w), 4])
-
         qimage = utilsfunc.numpy2qimage(image)
+
+
+
+
+
+
+
 
         self.image_label3.setPixmap(Qt.QPixmap(qimage))
         #
@@ -843,6 +852,99 @@ class MainWindow(Qt.QMainWindow):
 
 
     def update_texture(self):
+        plane = self.plane_actor.GetMapper().GetInput()
+        trasnfrom = self.plane_actor.GetUserTransform()
+        transform_plane = vtk_utils.apply_transform(plane, trasnfrom)
+        plane_pts = []
+        for i in range(transform_plane.GetNumberOfPoints()):
+            plane_pts.append(np.array(transform_plane.GetPoint(i)))
+
+        if self.mode_theta:
+            scalars = self.scalars_phi
+        else:
+            scalars = self.scalars_theta
+
+        origin = plane_pts[0]
+        pt1 = plane_pts[1]
+        pt2 = plane_pts[2]
+
+        normal = np.cross(pt1-origin, pt2 - origin)
+        normal = normal / np.linalg.norm(normal)
+
+        plane_center = (pt1 + pt2)/2
+
+        proj_points = np.dot(self.test_points - plane_center, normal)
+        where_positive, = np.where(proj_points > 0)
+
+        roi_points = self.test_points[where_positive]
+
+        # x_axis = np.cross(y, normal)
+
+        z = normal
+        xx = pt1 - origin
+        yy = pt2 - origin
+        x = xx / np.linalg.norm(xx)
+        y = yy / np.linalg.norm(yy)
+
+        sx = np.dot(self.test_points - plane_center, x)
+        sy = np.dot(self.test_points - plane_center, y)
+        sz = np.dot(self.test_points - plane_center, z)
+
+        sxyz = np.stack([sx, sy, sz], axis=1)
+
+        print(normal, plane_center)
+
+
+        # points = self.test_points[self.test_cells]
+
+        cells = proj_points[self.test_cells]
+        posit = np.all(cells > 0, axis=1)
+
+        # N X 3 X 3
+        sample_pts = sxyz[self.test_cells[posit]]
+
+        v0 = sample_pts[:, 0]
+        v1 = sample_pts[:, 1]
+        v2 = sample_pts[:, 2]
+
+        poly_normal = np.cross(v1 - v0, v2 - v0)
+        # N X 3
+        rois  = np.dot(poly_normal, z) > 0
+
+        samples = v0
+
+        # make an agg figure
+        fig, ax = plt.subplots()
+        # ax.plot(phi, z, '*')
+        # ax.plot([1, 2, 3])
+        # ax.imshow(scalar_image, cmap='hsv')
+        ax.plot(samples.T[0], samples.T[1], 'x')
+        ax.set_title('a simple figure')
+        ax.set_xlim(-7, 7)
+        ax.set_ylim(-7, 7)
+        fig.canvas.draw()
+
+        # grab the pixel buffer and dump it into a numpy array
+        buf = fig.canvas.buffer_rgba()
+        l, b, w, h = fig.bbox.bounds
+        # The array needs to be copied, because the underlying buffer
+        # may be reallocated when the window is resized.
+        X = np.frombuffer(buf, np.uint8).copy()
+
+        image = X.reshape([int(h), int(w), 4])
+
+        qimage = utilsfunc.numpy2qimage(image)
+
+        self.image_label2.setPixmap(Qt.QPixmap(qimage))
+        # self.image_label3.setPixmap(Qt.QPixmap(qimage2))
+
+
+
+
+
+
+        # self.test_points.
+    def update_texture2(self):
         plane = self.plane_actor.GetMapper().GetInput()
         trasnfrom = self.plane_actor.GetUserTransform()
         transform_plane = vtk_utils.apply_transform(plane, trasnfrom)
@@ -932,15 +1034,6 @@ class MainWindow(Qt.QMainWindow):
         scalar_image_phi = np.zeros([num, num], dtype=np.float32)
         scalar_image_phi[sampling==1] = sampling_scalars_phi
 
-        # roi_points_translate = roi_points - plane_center
-        # x = np.dot(x_axis, roi_points_translate.T)
-        # y = np.dot(y_axis, roi_points_translate.T)
-        # z = np.dot(z_axis, roi_points_translate.T)
-        #
-        # phi = np.arctan2(y, x)
-        # xy = np.stack([x, y], axis=1)
-
-
         # make an agg figure
         fig, ax = plt.subplots()
         # ax.plot(phi, z, '*')
@@ -982,111 +1075,6 @@ class MainWindow(Qt.QMainWindow):
 
 
         self.image_label2.setPixmap(Qt.QPixmap(qimage))
-        self.image_label3.setPixmap(Qt.QPixmap(qimage2))
-
-
-        #
-        #
-        # fig = plt.figure()
-        # ax = fig.add_subplot(111, projection='3d')
-        # sampling_pts = np.array(sampling_pts)
-        # resahpe_sampling = sampling_pts.reshape([-1, 3])
-        # ax.plot(resahpe_sampling.T[0], resahpe_sampling.T[1], resahpe_sampling.T[2], 'r*')
-        # plt.show()
-
-
-
-
-
-
-
-
-
-
-
-        # from scipy.stats import binned_statistic_2d
-        # ret = binned_statistic_2d(roi_vertices[..., 0],
-        #                     roi_vertices[..., 1], None, 'count',bins=[x, y], expand_binnumbers=True)
-
-
-        # bins = ret.binnumber
-
-        # x_verts = [ for ]
-        # roi_vertices[bins[0]]
-        # bins[0]
-
-        # ret.statistic
-
-
-
-
-
-
-        #
-        #
-        # proj_points = np.dot(self.test_points - plane_center, normal)
-        # where_positive, = np.where(proj_points > 0)
-        #
-        # roi_points = self.test_points[where_positive]
-        #
-        # posit_polygons = np.all(proj_points[self.test_cells] > 0, axis=1)
-        #
-        # where_posit_polygon = self.test_cells[posit_polygons]
-
-
-
-        # where_final = np.logical_and(np.logical_and(where_si_posit, where_ti_posit), where_st_posit)
-        #
-        #
-        # # one hot encoding??
-        # for ix in range(num):
-        #     where_x = inds_x == ix
-        #     for iy in range(num):
-        #         where_y = inds_y == iy
-        #         where = np.logical_and(where_x, where_y).any(axis=1)
-        #         if where.sum() > 0:
-        #             # 3
-        #             p0 = P0_inter[iy, ix]
-        #
-        #             #
-        #             # N X 3
-        #             vv0 = v0[where]
-        #             # N X 3
-        #             pn = poly_n[where]
-        #
-        #             # N X 3
-        #             numerator = np.sum((vv0 - p0) * pn, axis=1)
-        #             denominator = np.sum(pn * direction, axis=1)
-        #
-        #             # N
-        #             r = numerator / denominator
-        #
-        #             # N X 3
-        #             pts_on_plane = p0 + r.reshape([-1, 1]) * direction
-        #
-        #             poly_w = pts_on_plane - vv0
-        #
-        #             den0 = den[where]
-        #             wu = np.sum(poly_w * poly_u[where], axis=1)
-        #             wv = np.sum(poly_w * poly_v[where], axis=1)
-        #
-        #             si = (uv[where] * wv - vv[where] * wu) / den0
-        #             ti = (uv[where] * wu - vv[where] * wv) / den0
-        #
-        #             sumst = si + ti
-        #             where_si_posit = si >= 0
-        #             where_ti_posit = ti >= 0
-        #             where_st_posit = sumst <= 1
-        #
-        #             where_final = np.logical_and(np.logical_and(where_si_posit, where_ti_posit), where_st_posit)
-        #             # print(where_final.sum(), ix, iy)
-        #
-        #         else:
-        #             pass
-
-
-        # self.test_points.
-
 
 
 
@@ -1178,7 +1166,7 @@ class MainWindow(Qt.QMainWindow):
         plane_image = self.update_projection_image(plane_pts, plane_range, num)
 
         self.update_texture()
-        # self.update_surface()
+        self.update_surface()
 
         # self.update_projection_surface(plane_image, )
         # print( self.planeWidget.GetPoint1(), self.planeWidget.GetPoint1().
