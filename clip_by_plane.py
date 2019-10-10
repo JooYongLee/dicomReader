@@ -7,6 +7,9 @@ import matplotlib.pyplot as plt
 import utilsfunc
 import vtk_utils
 import cv2
+from sklearn.decomposition import PCA
+from mpl_toolkits.mplot3d import Axes3D
+from sklearn.neighbors import NearestNeighbors
 from mpl_toolkits.mplot3d import Axes3D
 from vtk.util import numpy_support
 from vtk_utils import timefn2
@@ -161,6 +164,10 @@ class ContourExtractor(object):
         where_final = np.logical_and(np.logical_and(where_si_posit, where_ti_posit), where_st_posit)
 
         return where_final, P0, pts_on_plane
+
+    def get_surface(self, x, y, z):
+        pass
+
 
     # @timefn2
     def update_test(self, sample_u_range, sample_v_range, origin, num=100):
@@ -565,6 +572,16 @@ def plnae_widget_test():
 
 class MainWindow(Qt.QMainWindow):
 
+    def anaysis_pca(self):
+        self.transform_pts = self.pca.transform(self.test_points)
+        self.scalars_theta = np.arctan2(self.transform_pts[:, 0], self.transform_pts[:, 2])
+        self.scalars_phi = np.arctan2(self.transform_pts[:, 1], self.transform_pts[:, 2])
+
+        self.theta_scalars = numpy_support.numpy_to_vtk(self.scalars_theta, array_type=vtk.VTK_FLOAT)
+        self.phi_scalars = numpy_support.numpy_to_vtk(self.scalars_phi, array_type=vtk.VTK_FLOAT)
+
+
+        pass
     def __init__(self, parent=None):
         super(MainWindow, self).__init__()
         # self.planeWidget = vtk.vtkPlaneWidget()
@@ -572,6 +589,16 @@ class MainWindow(Qt.QMainWindow):
         self.test_polydata = get_sample_data()
 
         self.test_points = numpy_support.vtk_to_numpy(self.test_polydata.GetPoints().GetData())
+
+        self.pca = PCA()
+        self.pca.fit(self.test_points)
+
+        self.anaysis_pca()
+
+        self.mode_theta = True
+
+
+
         celldata = numpy_support.vtk_to_numpy(self.test_polydata.GetPolys().GetData())
         celldata_reshape = celldata.reshape([-1, 4])
         cells = celldata_reshape[:, 1:]
@@ -593,8 +620,10 @@ class MainWindow(Qt.QMainWindow):
         mapper = vtk.vtkPolyDataMapper()
         mapper.SetInputData(plane_data)
 
+        t = vtk_utils.myTransform()
         self.plane_actor = vtk.vtkActor()
         self.plane_actor.SetMapper(mapper)
+        self.plane_actor.SetUserTransform(t)
         # self.plane_actor.GetProperty().SetColor(1, 1, 1)
 
         # self. vtk.vtkBoxWidget()
@@ -618,9 +647,21 @@ class MainWindow(Qt.QMainWindow):
         self.image_width = 400
         self.image_height = 400
         init_image = np.zeros([self.image_height, self.image_width, 3], dtype=np.uint8)
+
+        self.image_label2 = Qt.QLabel()
+
+        self.image_label3 = Qt.QLabel()
+
+
         qimage = utilsfunc.numpy2qimage(init_image)
         pixmap = Qt.QPixmap(qimage)
+
+        qimage2 = utilsfunc.numpy2qimage(init_image)
+        qimage3 = utilsfunc.numpy2qimage(init_image)
+
         self.image_label.setPixmap(pixmap)
+        self.image_label2.setPixmap(Qt.QPixmap(qimage2))
+        self.image_label3.setPixmap(Qt.QPixmap(qimage3))
 
         for act in self.init_marks:
             self.ren.AddActor(act)
@@ -631,19 +672,425 @@ class MainWindow(Qt.QMainWindow):
 
         self.init_plane_widget()
 
+        self.extractor_surf = ContourExtractor()
+
+        self.update_texture()
+        # self.update_surface()
+
         self.layout = Qt.QGridLayout()
         self.layout.addWidget(self.vtkWidget, 0, 0, 1, 1)
         self.layout.addWidget(self.image_label, 0, 1, 1, 1)
+        self.layout.addWidget(self.image_label2, 1, 0, 1, 1)
+        self.layout.addWidget(self.image_label3, 1, 1, 1, 1)
+
+
 
         self.frame = Qt.QFrame()
         self.frame.setLayout(self.layout)
 
         self.setCentralWidget(self.frame)
 
+        self.iren.AddObserver("KeyPressEvent", self.key_press_event)
+
         self.iren.Initialize()
         self.iren.Start()
 
         self.show()
+    def key_press_event(self, obj, event):
+        key = obj.GetKeySym()
+        if key =="c":
+            if self.mode_theta:
+                scalars = self.phi_scalars
+            else:
+                scalars = self.theta_scalars
+
+            self.mode_theta = not self.mode_theta
+
+            self.test_polydata.GetPointData().SetScalars(scalars)
+            self.test_actor.GetMapper().SetScalarRange(self.test_polydata.GetScalarRange())
+        self.iren.Render()
+
+    @timefn2
+    def update_surface(self):
+        plane = self.plane_actor.GetMapper().GetInput()
+        trasnfrom = self.plane_actor.GetUserTransform()
+        transform_plane = vtk_utils.apply_transform(plane, trasnfrom)
+        plane_pts = []
+        for i in range(transform_plane.GetNumberOfPoints()):
+            plane_pts.append(np.array(transform_plane.GetPoint(i)))
+
+        if self.mode_theta:
+            scalars = self.scalars_phi
+        else:
+            scalars = self.scalars_theta
+
+        origin = plane_pts[0]
+        pt1 = plane_pts[1]
+        pt2 = plane_pts[2]
+
+        normal = np.cross(pt1-origin, pt2 - origin)
+        normal = normal / np.linalg.norm(normal)
+
+        plane_center = (pt1 + pt2)/2
+
+        proj_points = np.dot(self.test_points - plane_center, normal)
+        where_positive, = np.where(proj_points > 0)
+
+        roi_points = self.test_points[where_positive]
+
+        # x_axis = np.cross(y, normal)
+
+        z_axis = normal
+        y_axis = np.array([0, 1, 0])
+        x_axis = np.cross(y_axis, z_axis)
+
+        roi_points_translate = roi_points - plane_center
+        x = np.dot(x_axis, roi_points_translate.T)
+        y = np.dot(y_axis, roi_points_translate.T)
+        z = np.dot(z_axis, roi_points_translate.T)
+
+        xy = np.stack([x, y], axis=1)
+
+        num = 100
+
+        sample_x = np.linspace(x.min(), x.max(), num)
+        sample_y = np.linspace(y.min(), y.max(), num)
+
+
+        transform_x = self.transform_pts[where_positive][:, 0]
+        transform_y = self.transform_pts[where_positive][:, 1]
+        transform_z = self.transform_pts[where_positive][:, 2]
+
+        tz = transform_x
+        t_phi = np.arctan2(transform_y, transform_z)
+
+        fig = plt.figure()
+        ax1 = fig.add_subplot(121)
+        ax2 = fig.add_subplot(122)
+
+        ax1.plot(transform_y, transform_x, '*')
+
+        ax2.plot(transform_y, transform_z, '*')
+
+        fig.canvas.draw()
+
+        # grab the pixel buffer and dump it into a numpy array
+        buf = fig.canvas.buffer_rgba()
+        l, b, w, h = fig.bbox.bounds
+
+        X = np.frombuffer(buf, np.uint8).copy()
+
+        image = X.reshape([int(h), int(w), 4])
+
+        qimage = utilsfunc.numpy2qimage(image)
+
+        self.image_label3.setPixmap(Qt.QPixmap(qimage))
+        #
+        # phi = np.arctan2(y, x)
+        # xy = np.stack([x, y], axis=1)
+        # radius = np.linalg.norm(xy, axis=1)
+        # dtheta = (np.pi * 2) / 100
+        # dz = 0.2
+        # dt_bins = np.linspace(-np.pi, np.pi, 100)
+        # dz_bins = np.linspace(-z.min(), z.max(), 100)
+        #
+        # phi_inds = np.digitize(phi, dt_bins)
+        # dz_inds = np.digitize(z, dz_bins)
+        #
+        # phi_list = []
+        # z_list = []
+        #
+        # for i_p in range(phi_inds.min(), phi_inds.max()+1):
+        #     theta_range = phi_inds == i_p
+        #     # theta_arg, = np.where(theta_range)
+        #     if theta_range.sum() > 0:
+        #         for i_z in range(dz_inds.min(), dz_inds.max()+1):
+        #             z_range = dz_inds == i_z
+        #             # z_arg, = np.where(z_range)
+        #             if theta_range.sum() > 0:
+        #                 cond = np.logical_and(theta_range, z_range)
+        #                 if cond.sum() > 0:
+        #                     cond_arg, = np.where(cond)
+        #                     max_radius_arg = np.argmax(radius[cond])
+        #                     sample_i = cond_arg[max_radius_arg]
+        #                     phi_list.append(phi[sample_i])
+        #                     z_list.append(z[sample_i])
+        #             else:
+        #                 pass
+        #
+        # phi_list = np.array(phi_list)
+        # z_list = np.array(z_list)
+        #
+        # # make an agg figure
+        # fig, ax = plt.subplots()
+        # ax.plot(phi_list, z_list, '*')
+        # # ax.plot([1, 2, 3])
+        # ax.set_title('a simple figure')
+        # fig.canvas.draw()
+        #
+        # # grab the pixel buffer and dump it into a numpy array
+        # buf = fig.canvas.buffer_rgba()
+        # l, b, w, h = fig.bbox.bounds
+        # # The array needs to be copied, because the underlying buffer
+        # # may be reallocated when the window is resized.
+        # X = np.frombuffer(buf, np.uint8).copy()
+        #
+        # image = X.reshape([int(h), int(w), 4])
+        #
+        # qimage = utilsfunc.numpy2qimage(image)
+        #
+        # self.image_label3.setPixmap(Qt.QPixmap(qimage))
+
+
+    def update_texture(self):
+        plane = self.plane_actor.GetMapper().GetInput()
+        trasnfrom = self.plane_actor.GetUserTransform()
+        transform_plane = vtk_utils.apply_transform(plane, trasnfrom)
+        plane_pts = []
+        for i in range(transform_plane.GetNumberOfPoints()):
+            plane_pts.append(np.array(transform_plane.GetPoint(i)))
+
+        origin = plane_pts[0]
+        pt1 = plane_pts[1]
+        pt2 = plane_pts[2]
+
+        normal = np.cross(pt1-origin, pt2 - origin)
+        normal = normal / np.linalg.norm(normal)
+
+        z_axis = normal
+        y_axis = np.array([0, 1, 0])
+        x_axis = np.cross(y_axis, z_axis)
+
+
+        plane_center = (pt1 + pt2)/2
+
+        transform = np.stack([x_axis, y_axis, z_axis], axis=1)
+        # N X 3
+        transform_xyz = np.dot(transform, (self.test_points - plane_center).T).T
+
+        # N X 3 X 3
+        # tri_poly_center_transform = np.sum(transform_xyz[self.test_cells], axis=1) / 3
+
+        rois = transform_xyz[..., 2] > 0
+        # rois = np.all(transform_xyz[..., 2][self.test_cells] > 0, axis=1)
+
+        roi_vertices = transform_xyz[rois]
+
+        roi_min = roi_vertices.min(axis=0)
+        roi_max = roi_vertices.max(axis=0)
+
+        roi_range = roi_max - roi_min
+
+        mid_roi = (roi_min + roi_max) / 2
+        max_range = np.max(roi_range[:2])
+        max_range_2 = max_range / 2
+        num = 100
+        x = np.linspace(mid_roi[0] - max_range_2, mid_roi[0] +max_range_2, num)
+        y = np.linspace(mid_roi[1] - max_range_2, mid_roi[1] +max_range_2, num)
+
+        inds_x = np.digitize(roi_vertices[..., 0], x)
+        inds_y = np.digitize(roi_vertices[..., 1], y)
+
+        verts_x = [roi_vertices[inds_x == i] for i in range(num)]
+        verts_y = [roi_vertices[inds_y == i] for i in range(num)]
+
+        arg_x = [np.squeeze(np.argwhere(inds_x == i), axis=1) for i in range(num)]
+        arg_y = [np.squeeze(np.argwhere(inds_y == i), axis=1) for i in range(num)]
+
+        # sample_list = []
+        # index_list = []
+        sampling_pts = []
+        sampling_index = []
+        sampling = np.zeros([num, num], dtype=np.int)
+        for ix in range(num):
+            if arg_x[ix].size > 0:
+                for iy in range(num):
+                    if arg_y[iy].size > 0:
+                        argx = arg_x[ix]
+                        argy = arg_y[iy]
+                        try:
+                            arg = argx[np.any(argx == argy.reshape([-1, 1]), axis=0)]
+                        except:
+                            print(argx)
+                        if arg.size > 0:
+                            sample = roi_vertices[arg]
+                            # z 축으로 가장 큰 값을 샘플링
+                            i = np.argmax(sample[:, 2])
+                            index = arg[i]
+                            sampling_pts.append(sample[i])
+                            sampling_index.append(index)
+                            # index_list.append(index)
+                            sampling[ix, iy] = 1
+
+        sampling_index = np.array(sampling_index)
+        sampling_scalars = self.scalars_theta[sampling_index]
+        sampling_scalars_phi = self.scalars_phi[sampling_index]
+
+        scalar_image = np.zeros([num, num], dtype=np.float32)
+        scalar_image[sampling==1] = sampling_scalars
+
+        scalar_image_phi = np.zeros([num, num], dtype=np.float32)
+        scalar_image_phi[sampling==1] = sampling_scalars_phi
+
+        # roi_points_translate = roi_points - plane_center
+        # x = np.dot(x_axis, roi_points_translate.T)
+        # y = np.dot(y_axis, roi_points_translate.T)
+        # z = np.dot(z_axis, roi_points_translate.T)
+        #
+        # phi = np.arctan2(y, x)
+        # xy = np.stack([x, y], axis=1)
+
+
+        # make an agg figure
+        fig, ax = plt.subplots()
+        # ax.plot(phi, z, '*')
+        # ax.plot([1, 2, 3])
+        ax.imshow(scalar_image, cmap='hsv')
+        ax.set_title('a simple figure')
+        fig.canvas.draw()
+
+        # grab the pixel buffer and dump it into a numpy array
+        buf = fig.canvas.buffer_rgba()
+        l, b, w, h = fig.bbox.bounds
+        # The array needs to be copied, because the underlying buffer
+        # may be reallocated when the window is resized.
+        X = np.frombuffer(buf, np.uint8).copy()
+
+        image = X.reshape([int(h), int(w), 4])
+
+        qimage = utilsfunc.numpy2qimage(image)
+
+
+        # make an agg figure
+        fig, ax = plt.subplots()
+        # ax.plot(phi, z, '*')
+        # ax.plot([1, 2, 3])
+        ax.imshow(scalar_image_phi, cmap='hsv')
+        ax.set_title('a simple figure')
+        fig.canvas.draw()
+
+        # grab the pixel buffer and dump it into a numpy array
+        buf = fig.canvas.buffer_rgba()
+        l, b, w, h = fig.bbox.bounds
+        # The array needs to be copied, because the underlying buffer
+        # may be reallocated when the window is resized.
+        X = np.frombuffer(buf, np.uint8).copy()
+
+        image = X.reshape([int(h), int(w), 4])
+
+        qimage2 = utilsfunc.numpy2qimage(image)
+
+
+        self.image_label2.setPixmap(Qt.QPixmap(qimage))
+        self.image_label3.setPixmap(Qt.QPixmap(qimage2))
+
+
+        #
+        #
+        # fig = plt.figure()
+        # ax = fig.add_subplot(111, projection='3d')
+        # sampling_pts = np.array(sampling_pts)
+        # resahpe_sampling = sampling_pts.reshape([-1, 3])
+        # ax.plot(resahpe_sampling.T[0], resahpe_sampling.T[1], resahpe_sampling.T[2], 'r*')
+        # plt.show()
+
+
+
+
+
+
+
+
+
+
+
+        # from scipy.stats import binned_statistic_2d
+        # ret = binned_statistic_2d(roi_vertices[..., 0],
+        #                     roi_vertices[..., 1], None, 'count',bins=[x, y], expand_binnumbers=True)
+
+
+        # bins = ret.binnumber
+
+        # x_verts = [ for ]
+        # roi_vertices[bins[0]]
+        # bins[0]
+
+        # ret.statistic
+
+
+
+
+
+
+        #
+        #
+        # proj_points = np.dot(self.test_points - plane_center, normal)
+        # where_positive, = np.where(proj_points > 0)
+        #
+        # roi_points = self.test_points[where_positive]
+        #
+        # posit_polygons = np.all(proj_points[self.test_cells] > 0, axis=1)
+        #
+        # where_posit_polygon = self.test_cells[posit_polygons]
+
+
+
+        # where_final = np.logical_and(np.logical_and(where_si_posit, where_ti_posit), where_st_posit)
+        #
+        #
+        # # one hot encoding??
+        # for ix in range(num):
+        #     where_x = inds_x == ix
+        #     for iy in range(num):
+        #         where_y = inds_y == iy
+        #         where = np.logical_and(where_x, where_y).any(axis=1)
+        #         if where.sum() > 0:
+        #             # 3
+        #             p0 = P0_inter[iy, ix]
+        #
+        #             #
+        #             # N X 3
+        #             vv0 = v0[where]
+        #             # N X 3
+        #             pn = poly_n[where]
+        #
+        #             # N X 3
+        #             numerator = np.sum((vv0 - p0) * pn, axis=1)
+        #             denominator = np.sum(pn * direction, axis=1)
+        #
+        #             # N
+        #             r = numerator / denominator
+        #
+        #             # N X 3
+        #             pts_on_plane = p0 + r.reshape([-1, 1]) * direction
+        #
+        #             poly_w = pts_on_plane - vv0
+        #
+        #             den0 = den[where]
+        #             wu = np.sum(poly_w * poly_u[where], axis=1)
+        #             wv = np.sum(poly_w * poly_v[where], axis=1)
+        #
+        #             si = (uv[where] * wv - vv[where] * wu) / den0
+        #             ti = (uv[where] * wu - vv[where] * wv) / den0
+        #
+        #             sumst = si + ti
+        #             where_si_posit = si >= 0
+        #             where_ti_posit = ti >= 0
+        #             where_st_posit = sumst <= 1
+        #
+        #             where_final = np.logical_and(np.logical_and(where_si_posit, where_ti_posit), where_st_posit)
+        #             # print(where_final.sum(), ix, iy)
+        #
+        #         else:
+        #             pass
+
+
+        # self.test_points.
+
+
+
+
+
 
     def update_markers(self, pts):
         # pt1 = self.planeWidget.GetOrigin()
@@ -729,6 +1176,9 @@ class MainWindow(Qt.QMainWindow):
         num = 200
         plane_range = (-4, 4)
         plane_image = self.update_projection_image(plane_pts, plane_range, num)
+
+        self.update_texture()
+        # self.update_surface()
 
         # self.update_projection_surface(plane_image, )
         # print( self.planeWidget.GetPoint1(), self.planeWidget.GetPoint1().
